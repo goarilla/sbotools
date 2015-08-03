@@ -17,81 +17,14 @@ use Getopt::Long qw(:config bundling);
 use File::Basename;
 
 my $self = basename($0);
-
-sub show_usage() {
-	print <<EOF
-Usage: $self [options] sbo
-
-Options (defaults shown first where applicable):
-  -h|--help:
-    this screen.
-  -v|--version:
-    version information.
-  -c|--noclean (FALSE|TRUE):
-    set whether or not to clean working files/directories after the build.
-  -d|--distclean (TRUE|FALSE):
-   set whether or not to clean distfiles afterward. 
-  -i|--noinstall:
-    do not run installpkg at the end of the build process.
-  -j|--jobs (FALSE|#):
-    specify "-j" setting to make, for multicore systems; overrides conf file.
-  -p|--compat32:
-    install an SBo as a -compat32 pkg on a multilib x86_64 system.
-  -r|--nointeractive:
-    non-interactive; skips README and all prompts.
-  -R|--norequirements:
-    view the README but do not parse requirements, commands, or options.
-
-EOF
-}
-
-my $noclean = $config{NOCLEAN};
-my $distclean = $config{DISTCLEAN};
-my $jobs = $config{JOBS};
-my ($help, $vers, $no_install, $non_int, $no_reqs, $compat32);
-
-GetOptions(
-	'help|h'			=> \$help,
-	'version|v'			=> \$vers,
-	'noclean|c=s'		=> \$noclean,
-	'distclean|d=s'		=> \$distclean,
-	'noinstall|i'		=> \$no_install,
-	'jobs|j=s'			=> \$jobs,
-	'compat32|p'		=> \$compat32,
-	'nointeractive|r'	=> \$non_int,
-	'norequirements|R'	=> \$no_reqs,
-);
-
-show_usage and exit 0 if $help;
-show_version and exit 0 if $vers;
-show_usage and exit 1 unless exists $ARGV[0];
-
-$noclean = $noclean eq 'TRUE' ? 1 : 0;
-$distclean = $distclean eq 'TRUE' ? 1 : 0;
-
-if ($jobs) {
-	usage_error "You have provided an invalid value for -j|--jobs"
-		unless ($jobs =~ /^\d+$/ || $jobs eq 'FALSE');
-}
-
-if ($compat32) {
-	usage_error "compat32 only works on x86_64." unless get_arch eq 'x86_64';
-}
-
-# if we can't find SLACKBUILDS.TXT in $config{HOME}, prompt to fetch the tree
-slackbuilds_or_fetch;
+exit 1 unless exists $ARGV[0];
 
 my (%warnings, $build_queue, %locations);
 
-if ($no_reqs or $non_int) {
-    $build_queue = \@ARGV;
-} else {
-	for my $sbo (@ARGV) {
-        my $queue = get_build_queue([$sbo], \%warnings);
-        $build_queue = merge_queues($build_queue, $queue);
-	}
+for my $sbo (@ARGV) {
+    my $queue = get_build_queue([$sbo], \%warnings);
+    $build_queue = merge_queues($build_queue, $queue);
 }
-
 
 # populate %locations and sanity check
 %locations = get_sbo_location($build_queue);
