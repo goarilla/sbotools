@@ -41,6 +41,9 @@ Options (defaults shown first where applicable):
     non-interactive; skips README and all prompts.
   -R|--norequirements:
     view the README but do not parse requirements, commands, or options.
+  -D|--deps:
+    show the resulting buildqueue with dependancies
+
 
 EOF
 }
@@ -48,7 +51,7 @@ EOF
 my $noclean = $config{NOCLEAN};
 my $distclean = $config{DISTCLEAN};
 my $jobs = $config{JOBS};
-my ($help, $vers, $no_install, $non_int, $no_reqs, $compat32);
+my ($help, $vers, $no_install, $non_int, $no_reqs, $compat32, $only_deps);
 
 GetOptions(
 	'help|h'			=> \$help,
@@ -60,6 +63,7 @@ GetOptions(
 	'compat32|p'		=> \$compat32,
 	'nointeractive|r'	=> \$non_int,
 	'norequirements|R'	=> \$no_reqs,
+  'deps|D' => \$only_deps,
 );
 
 show_usage and exit 0 if $help;
@@ -101,6 +105,13 @@ for my $sbo (@$build_queue) {
 		usage_error "-p|--compat32 is not supported with Perl SBos."
 			if $locations{$sbo} =~ qr|/perl/[^/]+$|;
 	}
+}
+
+if ( $only_deps ){
+  for my $sbo (@$build_queue){
+    print $sbo ."\n";
+  }
+  exit 0;
 }
 
 # get lists of installed packages and perl modules from CPAN
