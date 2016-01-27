@@ -43,7 +43,7 @@ Options (defaults shown first where applicable):
   -R|--norequirements:
     view the README but do not parse requirements, commands, or options.
   -D|--deps:
-    show the resulting buildqueue with dependancies
+    only show the buildqueue's dependencies
 
 
 EOF
