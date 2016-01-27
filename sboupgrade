@@ -1,25 +1,26 @@
-#!/usr/bin/env perl
+#!/usr/bin/perl
 #
 # vim: set ts=4:noet
 #
 # sboupgrade
 # script to upgrade (a) SlackBuild(s) by name
 #
-# authors:	Jacob Pipkin <j@dawnrazor.net>
-#			Luke Williams <xocel@iquidus.org>
+# authors: Jacob Pipkin <j@dawnrazor.net>
+#          Luke Williams <xocel@iquidus.org>
+#          Andreas Guldstrand <andreas.guldstrand@gmail.com>
 # license: WTFPL <http://sam.zoy.org/wtfpl/COPYING>
 
 use 5.16.0;
 use strict;
 use warnings FATAL => 'all';
-use SBO::Lib;
+use SBO::Lib qw/ get_available_updates usage_error slackbuilds_or_fetch uniq get_sbo_location get_inst_names get_installed_packages get_build_queue get_sbo_locations merge_queues user_prompt process_sbos print_failures %config /;
 use Getopt::Long qw(:config bundling);
 use File::Basename;
 use File::Copy;
 
 my $self = basename($0);
 
-sub show_usage() {
+sub show_usage {
     print <<EOF
 Usage: $self (options) [package]
 
@@ -42,6 +43,8 @@ Options (defaults shown first where applicable):
     non-interactive; skips README and all prompts.
   -z|--force-reqs:
     when used with -f, will force rebuilding an SBo's requirements as well.
+  --all
+    this flag will upgrade everything reported by sbocheck(1).
 
 EOF
 }
@@ -49,48 +52,51 @@ EOF
 my $noclean = $config{NOCLEAN};
 my $distclean = $config{DISTCLEAN};
 my $jobs = $config{JOBS};
-my ($help, $vers, $force, $no_install, $non_int, $force_reqs);
+my ($help, $vers, $force, $no_install, $non_int, $force_reqs, $all);
 # backwards compatibility options
 my ($install_new, $no_reqs, $compat32);
 
 GetOptions(
-    'help|h'            => \$help,
-    'version|v'         => \$vers,
-    'noclean|c=s'       => \$noclean,
-    'distclean|d=s'     => \$distclean,
-    'force|f'           => \$force,
-    'noinstall|i'       => \$no_install,
-    'jobs|j=s'          => \$jobs,
-	'installnew|N'		=> \$install_new,
-    'nointeractive|r'   => \$non_int,
-    'norequirements|R'  => \$no_reqs,
-    'force-reqs|z'      => \$force_reqs,
-	'compat32|p'		=> \$compat32,
+	'help|h'            => \$help,
+	'version|v'         => \$vers,
+	'noclean|c=s'       => \$noclean,
+	'distclean|d=s'     => \$distclean,
+	'force|f'           => \$force,
+	'noinstall|i'       => \$no_install,
+	'jobs|j=s'          => \$jobs,
+	'nointeractive|r'   => \$non_int,
+	'force-reqs|z'      => \$force_reqs,
+	'all'               => \$all,
 );
 
-show_usage and exit 0 if $help;
-show_version and exit 0 if $vers;
-show_usage and exit 1 unless exists $ARGV[0];
+show_usage() and exit 0 if $help;
+show_version() and exit 0 if $vers;
+
+my $updates;
+if ($all) {
+	slackbuilds_or_fetch();
+	print "Checking for updated SlackBuilds...\n";
+	$updates = get_available_updates();
+	push @ARGV, map { $_->{name} } @$updates;
+}
+
+show_usage() and exit 1 unless exists $ARGV[0];
 
 $noclean = $noclean eq 'TRUE' ? 1 : 0;
 $distclean = $distclean eq 'TRUE' ? 1 : 0;
 
 if ($jobs) {
-	usage_error "You have provided an invalid value for -j|--jobs"
+	usage_error("You have provided an invalid value for -j|--jobs")
 		unless ($jobs =~ /^\d+$/ || $jobs eq 'FALSE');
 }
 
-usage_error "-r|--nointeractive and -z|--force-reqs can not be used together."
+usage_error("-r|--nointeractive and -z|--force-reqs can not be used together.")
 	if $non_int && $force_reqs;
-usage_error "-R|--norequirements does not make sense without -N|--installnew"
-	if $no_reqs && ! $install_new;
-usage_error "-p|--compat32 does not make sense without -N|--installnew"
-	if $compat32 && ! $install_new;
 
 # if we can't find SLACKBUILDS.TXT in $config{HOME}, prompt to fetch the tree
-slackbuilds_or_fetch;
+slackbuilds_or_fetch();
 
-my @sbos = @ARGV;
+my @sbos = uniq @ARGV;
 
 # pull locations for everything specified on command line.
 my %locations;
@@ -98,93 +104,66 @@ for my $sbo (@sbos) {
 	my $name = $sbo;
 	$name =~ s/-compat32//;
 	$locations{$sbo} = get_sbo_location($name);
-	usage_error "Unable to locate $sbo in the SlackBuilds.org tree." unless
+	usage_error("Unable to locate $sbo in the SlackBuilds.org tree.") unless
 		$locations{$sbo};
 	if ($sbo =~ /-compat32$/) {
-		usage_error "compat32 Perl SBos are not supported."
+		usage_error("compat32 Perl SBos are not supported.")
 			if $locations{$sbo} =~ qr|/perl/[^/]+$|;
 	}
 }
 
 # get a list of installed SBos to check upgradability against
-my $inst_names = get_inst_names(get_installed_packages 'SBO');
+my $inst_names = get_inst_names(get_installed_packages('SBO'));
 my %inst_names;
 $inst_names{$_} = 1 for @$inst_names;
-
-# backwards compatibility
-if ($install_new) {
-	# warn about future removal and pause for five seconds - which hopefully
-	# might encourage the user to read and take note of the warning.
-	warn "-N is deprecated and will disappear in a future release.\n";
-	select((select(STDOUT), $| = 1)[0]);
-	print("."), sleep 1 for 1..5;
-	say '';
-	$| = 0;
-	for my $sbo (@sbos) {
-		my $name = $sbo;
-		$name =~ s/$/-compat32/ if $compat32 && $sbo !~ /-compat32$/;
-		unless ($inst_names{$name}) {
-			my @args = ('/usr/sbin/sboinstall');
-			push @args, $noclean ? '-cTRUE' : '-cFALSE';
-			push @args, $distclean ? '-dTRUE' : '-dFALSE';
-			push @args, '-R' if $no_reqs;
-			push @args, '-p' if $compat32;
-			push @args, '-i' if $no_install;
-			push @args, '-r' if $non_int;
-			push @args, '-R' if $no_reqs;
-			push @args, "-j$jobs" if $jobs;
-			system(@args, $sbo);
-		}
-	}
+my %updates;
+if (not $non_int or not $force) {
+	$updates //= get_available_updates();
+	$updates{$$_{name}} = 1 for @$updates;
 }
 
-my $upgrade_queue;
+my $upgrade_queue = [];
 
 # doesn't matter what's updatable and what's not if force is specified,
 # but without force, we only want to update what there are updates for
-unless ($force) {
-	my %updates;
-	my $updates = get_available_updates;
-	$updates{$$_{name}} = 1 for @$updates;
-    for my $sbo (@sbos) {
-		push @$upgrade_queue, $sbo if $updates{$sbo};
-    }
-} else {
-    if ($force_reqs && ! $non_int) {
-		my $temp_queue;
-        for my $sbo (@sbos) {
-			my $name = $sbo;
-			$name =~ s/-compat32$//;
-			my $queue = get_build_queue([$name], my $warnings);
-			my $queue2;
-			for my $item (@$queue) {
-				push @$queue2, $item if $inst_names{$item};
-			}
-			$queue = $queue2;
-			my $cqueue;
-			# get locations for all the things
-			my %locs = get_sbo_location($queue);
-			my %clocs;
-			# -compat32-ify the queue and locations if appropriate
-			if ($sbo =~ /-compat32$/) {
-				$cqueue = $queue;
-				s/$/-compat32/g for @$cqueue;
-				$queue = $cqueue;
-				while (my ($key, $val) = each %locs) {
-					$key =~ s/$/-compat32/;
-					$clocs{$key} = $val;
-				}
-				%locs = %clocs;
-			}
-			@locations{keys %locs} = values %locs;
-			$temp_queue = merge_queues($temp_queue, $queue);
-        }
-		$upgrade_queue = $temp_queue;
-    } else {
+if ($non_int) {
+	if ($force) {
 		for my $sbo (@sbos) {
 			push @$upgrade_queue, $sbo if $inst_names{$sbo};
 		}
-    }
+	} else {
+		for my $sbo (@sbos) {
+			push @$upgrade_queue, $sbo if $updates{$sbo};
+		}
+	}
+} else {
+	for my $sbo (@sbos) {
+		my $name = $sbo;
+		$name =~ s/-compat32$//;
+		my $queue = get_build_queue([$name], my $warnings);
+		if (not $force_reqs) {
+			@$queue = grep { !$inst_names{$_} or $updates{$_} } @$queue;
+		}
+		push @$queue, $name if $force;
+		my $cqueue;
+		# get locations for all the things
+		my %locs = get_sbo_locations($queue);
+		my %clocs;
+		# -compat32-ify the queue and locations if appropriate
+		if ($sbo =~ /-compat32$/) {
+			$cqueue = $queue;
+			s/$/-compat32/g for @$cqueue;
+			$queue = $cqueue;
+			for my $key (keys %locs) {
+				my $val = $locs{$key};
+				$key =~ s/$/-compat32/;
+				$clocs{$key} = $val;
+			}
+			%locs = %clocs;
+		}
+		@locations{keys %locs} = values %locs;
+		$upgrade_queue = merge_queues($upgrade_queue, $queue);
+	}
 }
 
 # Get user input regarding upgrades

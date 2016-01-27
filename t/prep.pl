@@ -14,23 +14,24 @@ copy('../SBO-Lib/lib/Sort/Versions.pm', "$pwd/Sort");
 
 open my $write, '>>', "$pwd/SBO/Lib.pm";
 
-sub pr($) {
+sub pr {
 	my $thing = shift;
 	print {$write} "our \$$thing = 1;\n";
 }
 
 for my $thing (qw(interactive compat32 no_readme jobs distclean noclean
 	no_install no_reqs force force_reqs clean non_int)) {
-	pr $thing;
+	pr($thing);
 }
 
+print {$write} "use List::Util 'max';\n";
 print {$write} "my \%required_by;\n";
 print {$write} "our \@confirmed;\n";
 print {$write} "my \%locations;\n";
 print {$write} "my \%commands;\n";
 print {$write} "my \%options = (nothing => 'to see here');\n";
 
-sub get_subs($) {
+sub get_subs {
 	my $read = shift;
 	my $begin_regex = qr/^sub\s+[a-z0-9_]+/;
 	my $usage_regex = qr/^sub\s+show_usage/;
@@ -56,7 +57,7 @@ sub get_subs($) {
 
 for my $file (qw(sbocheck sboclean sboconfig sbofind sboupgrade sboremove)) {
 	open my $read, '<', "../$file";
-	get_subs $read;
+	get_subs($read);
 	close $read;
 }
 close $write;
@@ -77,7 +78,7 @@ FIRST: for my $sub (@subs) {
 	my $has = 'FALSE';
 	SECOND: while (my $line = <$file_h>) {
 		if ($found eq 'FALSE') {
-			$found = 'TRUE', next SECOND if $line =~ /\@EXPORT/;
+			$found = 'TRUE', next SECOND if $line =~ /our \@EXPORT_OK/;
 		} else {
 			last SECOND if $line =~ /^\);$/;
 			$has = 'TRUE', last SECOND if $line =~ /$sub/;
@@ -90,10 +91,11 @@ FIRST: for my $sub (@subs) {
 close $file_h;
 tie my @file, 'Tie::File', "$pwd/SBO/Lib.pm";
 FIRST: for my $line (@file) {
-	if ($line =~ /\@EXPORT/) {
-		$line = "our \@EXPORT = qw(". join ' ', @not_exported;
+	if ($line =~ /our \@EXPORT_OK/) {
+		$line = "our \@EXPORT_OK = qw(". join ' ', @not_exported;
 	}
-	$line =~ s/^/#/ if $line =~ /^read_config;$/;
+	$line =~ s/^/#/ if $line =~ /^(read_config;|__END__)$/;
+	$line =~ s/^/1; #/ if $line =~ /^'ok';$/;
 }
 
 my $found = 0;

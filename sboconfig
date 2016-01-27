@@ -1,18 +1,19 @@
-#!/usr/bin/env perl
+#!/usr/bin/perl
 #
 # vim: set ts=4:noet
 #
 # sboconfig
 # script to handle sbotools configuration
 #
-# authors:	Jacob Pipkin <j@dawnrazor.net>
-#			Luke Williams <xocel@iquidus.org>
+# authors: Jacob Pipkin <j@dawnrazor.net>
+#          Luke Williams <xocel@iquidus.org>
+#          Andreas Guldstrand <andreas.guldstrand@gmail.com>
 # license: WTFPL <http://sam.zoy.org/wtfpl/COPYING>
 
 use 5.16.0;
 use strict;
 use warnings FATAL => 'all';
-use SBO::Lib;
+use SBO::Lib qw/ usage_error script_error $tempdir open_read open_fh %config $conf_dir $conf_file /;
 use File::Basename;
 use Getopt::Long;
 use File::Copy;
@@ -21,7 +22,7 @@ use File::Temp qw(tempfile);;
 
 my $self = basename($0);
 
-sub show_usage() {
+sub show_usage {
 	print <<EOF
 Usage: $self [options] [arguments]
 
@@ -41,6 +42,12 @@ Config options (defaults shown):
       PKG_DIR: set a directory to store packages in. 
   -s|--sbo-home /usr/sbo:
       SBO_HOME: set the SBo directory.
+  -o|--local-overrides FALSE:
+      LOCAL_OVERRIDES: a directory containing local overrides.
+  -V|--slackware-version FALSE:
+      SLACKWARE_VERSION: use the SBo repository for this version.
+  -r|--repo FALSE:
+      REPO: use a repository other than SBo.
 
 EOF
 }
@@ -48,25 +55,32 @@ EOF
 my %options;
 
 GetOptions(\%options, 'help|h', 'version|v', 'list|l', 'noclean|c=s',
-	'distclean|d=s', 'jobs|j=s', 'pkg-dir|p=s', 'sbo-home|s=s');
+	'distclean|d=s', 'jobs|j=s', 'pkg-dir|p=s', 'sbo-home|s=s',
+	'local-overrides|o=s', 'slackware-version|V=s', 'repo|r=s');
 
-show_usage and exit 0 if exists $options{help};
-show_version and exit 0 if exists $options{version};
+show_usage() and exit 0 if exists $options{help};
+show_version() and exit 0 if exists $options{version};
 
 my %valid_confs = (
-	noclean		=> 'NOCLEAN',
-	distclean	=> 'DISTCLEAN',
-	jobs		=> 'JOBS',
-	'pkg-dir'	=> 'PKG_DIR',
-	'sbo-home'	=> 'SBO_HOME',
+	noclean             => 'NOCLEAN',
+	distclean           => 'DISTCLEAN',
+	jobs                => 'JOBS',
+	'pkg-dir'           => 'PKG_DIR',
+	'sbo-home'          => 'SBO_HOME',
+	'local-overrides'   => 'LOCAL_OVERRIDES',
+	'slackware-version' => 'SLACKWARE_VERSION',
+	'repo'              => 'REPO',
 );
 
 my %params = (
-	NOCLEAN		=> 'c|--noclean',
-	DISTCLEAN	=> 'd|--distclean',
-	JOBS		=> 'j|--jobs',
-	PKG_DIR		=> 'p|--pkg-dir',
-	SBO_HOME	=> 's|--sbo-home',
+	NOCLEAN           => 'c|--noclean',
+	DISTCLEAN         => 'd|--distclean',
+	JOBS              => 'j|--jobs',
+	PKG_DIR           => 'p|--pkg-dir',
+	SBO_HOME          => 's|--sbo-home',
+	LOCAL_OVERRIDES   => 'o|--local-overrides',
+	SLACKWARE_VERSION => 'V|--slackware-version',
+	REPO              => 'r|--repo',
 );
 
 if (exists $options{list}) {
@@ -75,30 +89,37 @@ if (exists $options{list}) {
 	exit 0;
 }
 
-show_usage and exit 0 unless keys %options > 0;
+show_usage() and exit 0 unless keys %options > 0;
 
 # setup what's being changed, sanity check.
 my %changes;
-while (my ($key, $value) = each %valid_confs) {
+for my $key (keys %valid_confs) {
+	my $value = $valid_confs{$key};
 	$changes{$value} = $options{$key} if exists $options{$key};
 }
 
 my $warn = 'You have provided an invalid parameter for';
 
 if (exists $changes{NOCLEAN}) {
-	usage_error "$warn -c" unless $changes{NOCLEAN} =~ /^(TRUE|FALSE)$/;
+	usage_error("$warn -c") unless $changes{NOCLEAN} =~ /^(TRUE|FALSE)$/;
 }
 if (exists $changes{DISTCLEAN}) {
-	usage_error "$warn -d" unless $changes{DISTCLEAN} =~ /^(TRUE|FALSE)$/;
+	usage_error("$warn -d") unless $changes{DISTCLEAN} =~ /^(TRUE|FALSE)$/;
 }
 if (exists $changes{JOBS}) {
-	usage_error "$warn -j" unless $changes{JOBS} =~ /^(\d+|FALSE)$/;
+	usage_error("$warn -j") unless $changes{JOBS} =~ /^(\d+|FALSE)$/;
 }
 if (exists $changes{PKG_DIR}) {
-	usage_error "$warn -p" unless $changes{PKG_DIR} =~ qr#^(/|FALSE$)#;
+	usage_error("$warn -p") unless $changes{PKG_DIR} =~ qr#^(/|FALSE$)#;
 }
 if (exists $changes{SBO_HOME}) {
-	usage_error "$warn -s" unless $changes{SBO_HOME} =~ qr#^/#;
+	usage_error("$warn -s") unless $changes{SBO_HOME} =~ qr#^/#;
+}
+if (exists $changes{LOCAL_OVERRIDES}) {
+	usage_error("$warn -o") unless $changes{LOCAL_OVERRIDES} =~ qr#^(/|FALSE$)#;
+}
+if (exists $changes{SLACKWARE_VERSION}) {
+	usage_error("$warn -V") unless $changes{SLACKWARE_VERSION} =~ m/^(\d+\.\d+|FALSE)$/;
 }
 
 # safely modify our conf file; write its contents to a temp file, modify the
@@ -107,14 +128,14 @@ if (exists $changes{SBO_HOME}) {
 # them all at once, instead of only a single one and having to call it once for
 # each option specified to the script.
 sub config_write {
-	exists $_[1] or script_error 'config_write requires two arguments.';
+	exists $_[1] or script_error('config_write requires two arguments.');
 	my ($key, $val) = @_;
 	if (! -d $conf_dir) {
-		mkdir $conf_dir or usage_error "Unable to create $conf_dir. Exiting.";
+		mkdir $conf_dir or usage_error("Unable to create $conf_dir. Exiting.");
 	}
 	if (-f $conf_file) {
 		my $tempfh = tempfile(DIR => $tempdir);
-		my ($conffh, $exit) = open_read $conf_file;
+		my ($conffh, $exit) = open_read($conf_file);
 		if ($exit) {
 			warn $conffh;
 			exit $exit;
@@ -141,11 +162,11 @@ sub config_write {
 			warn $conffh;
 			exit $exit;
 		}
-		print {$conffh} $contents or return;
+		print {$conffh} $contents or return();
 		close $conffh, close $tempfh;
 	} else {
 		# no config file, easiest case of all.
-		my ($fh, $exit) = open_fh($conf_file, '>') or return;
+		my ($fh, $exit) = open_fh($conf_file, '>') or return();
 		if ($exit) {
 			warn $fh;
 			exit $exit;
@@ -156,7 +177,8 @@ sub config_write {
 	return 1;
 }
 
-while (my ($key, $value) = each %changes) {
+for my $key (keys %changes) {
+	my $value = $changes{$key};
 	say "Setting $key to $value...";
 	config_write($key, $value);
 }

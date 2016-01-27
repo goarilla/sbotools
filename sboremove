@@ -1,4 +1,4 @@
-#!/usr/bin/env perl
+#!/usr/bin/perl
 #
 # vim: set ts=4:noet
 #
@@ -6,19 +6,20 @@
 # script to remove an installed SlackBuild
 #
 # authors: Luke Williams <xocel@iquidus.org>
-# 		   Jacob Pipkin <j@dawnrazor.net>
+#          Jacob Pipkin <j@dawnrazor.net>
+#          Andreas Guldstrand <andreas.guldstrand@gmail.com>
 # license: WTFPL <http://sam.zoy.org/wtfpl/COPYING>
 
 use 5.16.0;
 use strict;
 use warnings FATAL => 'all';
-use SBO::Lib;
+use SBO::Lib qw/ get_inst_names get_installed_packages get_sbo_location get_build_queue merge_queues get_requires get_readme_contents get_sbo_location /;
 use Getopt::Long qw(:config bundling);
 use File::Basename;
 
 my $self = basename ($0);
 
-sub show_usage() {
+sub show_usage {
 	print <<EOF
 Usage: $self [options] sbo
 
@@ -44,9 +45,9 @@ GetOptions(
 	'alwaysask|a'		=> \$alwaysask,
 );
 
-show_usage and exit 0 if $help;
-show_version and exit 0 if $vers;
-show_usage and exit 1 unless exists $ARGV[0];
+show_usage() and exit 0 if $help;
+show_version() and exit 0 if $vers;
+show_usage() and exit 1 unless exists $ARGV[0];
 
 # ensure that all provided arguments are valid sbos
 my @sbos;
@@ -75,10 +76,10 @@ for my $sbo (@sbos) {
 my (%required_by, @confirmed);
 
 # populates the required_by hash 
-sub get_reverse_reqs($) {
+sub get_reverse_reqs {
 	my $installed = shift;
 	FIRST: for my $inst (@$installed) {
-		my $require = get_requires $inst;
+		my $require = get_requires($inst);
 		next FIRST unless $$require[0];
 		SECOND: for my $req (@$require) {
 			unless ( $req eq '%README%' ) {
@@ -92,11 +93,11 @@ sub get_reverse_reqs($) {
 		}	
 	}
 }
-get_reverse_reqs $inst_names;
+get_reverse_reqs($inst_names);
 
 # returns a list of installed sbo's that list the given sbo as a requirement,
 # excluding any installed sbo's that have already been confirmed for removal
-sub get_required_by($) {
+sub get_required_by {
 	my $sbo = shift;
 	my @dep_of;
 	if ( $required_by{$sbo} ) {
@@ -111,7 +112,7 @@ sub get_required_by($) {
 	return exists $dep_of[0] ? \@dep_of : undef;
 }
 
-sub confirm_remove($) {
+sub confirm_remove {
 	my $sbo = shift;
 	my $found = 0;
 	for my $conf (@confirmed) {
@@ -131,7 +132,7 @@ if ($inst_names) {
 
 # Confirm all and skip prompts if noninteractive
 if ($non_int) {
-	confirm_remove $_ for @$remove_queue;
+	confirm_remove($_) for @$remove_queue;
 	goto CONFIRMED;
 }
 
@@ -160,7 +161,7 @@ FIRST: for my $remove (@$remove_queue) {
 		say "It is recommended that you view the README before continuing.";
 		print "Display README now? [y]: ";
 		if (<STDIN> =~ /^[Yy\n]/) {
-			my ($readme, $exit) = get_readme_contents get_sbo_location($remove);
+			my ($readme, $exit) = get_readme_contents(get_sbo_location($remove));
 			if ($exit) {
 				warn "Unable to open README for $remove.\n";
 			} else {

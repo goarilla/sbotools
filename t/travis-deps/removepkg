@@ -1,0 +1,3 @@
+#!/bin/bash
+
+rm /var/log/packages/$1 &>/dev/null || rm /var/log/packages/$1-* &>/dev/null
