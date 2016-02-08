@@ -27,7 +27,7 @@ for my $sbo (@ARGV) {
 }
 
 # populate %locations and sanity check
-%locations = get_sbo_location($build_queue);
+%locations = get_sbo_locations($build_queue);
 for my $sbo (@$build_queue) {
   print $sbo . "\n";
 }
